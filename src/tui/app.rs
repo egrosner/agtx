@@ -72,6 +72,8 @@ struct AppState {
     pr_creation_rx: Option<mpsc::Receiver<Result<(i32, String), String>>>,
     // Confirmation popup for moving to Done with open PR
     done_confirm_popup: Option<DoneConfirmPopup>,
+    // Confirmation popup for deleting a task
+    delete_confirm_popup: Option<DeleteConfirmPopup>,
 }
 
 /// State for confirming move to Done when PR is still open
@@ -144,6 +146,13 @@ struct FileSearchState {
     matches: Vec<String>,
     selected: usize,
     start_pos: usize, // Position in input_buffer where # was typed
+}
+
+/// State for delete confirmation popup
+#[derive(Debug, Clone)]
+struct DeleteConfirmPopup {
+    task_id: String,
+    task_title: String,
 }
 
 pub struct App {
@@ -224,6 +233,7 @@ impl App {
                 pr_status_popup: None,
                 pr_creation_rx: None,
                 done_confirm_popup: None,
+                delete_confirm_popup: None,
             },
         };
 
@@ -367,10 +377,16 @@ impl App {
             let is_selected_column = state.board.selected_column == i;
 
             let title = format!(" {} ({}) ", status.as_str(), tasks.len());
-            let border_style = if is_selected_column {
-                Style::default().fg(hex_to_color(&state.config.theme.color_selected))
+            let (border_style, title_style) = if is_selected_column {
+                (
+                    Style::default().fg(hex_to_color(&state.config.theme.color_selected)),
+                    Style::default().fg(hex_to_color(&state.config.theme.color_selected)),
+                )
             } else {
-                Style::default().fg(hex_to_color(&state.config.theme.color_normal))
+                (
+                    Style::default().fg(hex_to_color(&state.config.theme.color_normal)),
+                    Style::default().fg(hex_to_color(&state.config.theme.color_column_header)),
+                )
             };
 
             // Calculate card height (title + preview lines + borders)
@@ -400,6 +416,7 @@ impl App {
             // Draw column border
             let column_block = Block::default()
                 .title(title)
+                .title_style(title_style)
                 .borders(Borders::ALL)
                 .border_style(border_style);
             let inner_area = column_block.inner(columns[i]);
@@ -445,7 +462,7 @@ impl App {
                     } else {
                         "░"
                     };
-                    let style = Style::default().fg(Color::DarkGray);
+                    let style = Style::default().fg(hex_to_color(&state.config.theme.color_dimmed));
                     frame.render_widget(
                         Paragraph::new(char).style(style),
                         Rect {
@@ -475,11 +492,11 @@ impl App {
                 }
             }
             InputMode::InputTitle => " Enter task title... [Esc] cancel [Enter] next ".to_string(),
-            InputMode::InputDescription => " Enter prompt for agent... [Esc] cancel [\\+Enter] newline [Enter] save ".to_string(),
+            InputMode::InputDescription => " Enter prompt for agent... [#] file search [Esc] cancel [\\+Enter] newline [Enter] save ".to_string(),
         };
 
         let footer = Paragraph::new(footer_text.as_str())
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(hex_to_color(&state.config.theme.color_dimmed)))
             .block(Block::default().borders(Borders::ALL));
         frame.render_widget(footer, chunks[2]);
 
@@ -545,12 +562,13 @@ impl App {
 
                     frame.render_widget(Clear, dropdown_area);
 
+                    let file_selected_color = hex_to_color(&state.config.theme.color_selected);
                     let items: Vec<ListItem> = search.matches
                         .iter()
                         .enumerate()
                         .map(|(i, path)| {
                             let style = if i == search.selected {
-                                Style::default().bg(Color::Yellow).fg(Color::Black)
+                                Style::default().bg(file_selected_color).fg(Color::Black)
                             } else {
                                 Style::default().fg(Color::White)
                             };
@@ -644,7 +662,7 @@ impl App {
                 " [Ctrl+j/k] scroll [Ctrl+q] close | At bottom ".to_string()
             };
             let footer = Paragraph::new(scroll_indicator)
-                .style(Style::default().fg(Color::Black).bg(Color::DarkGray));
+                .style(Style::default().fg(Color::Black).bg(hex_to_color(&state.config.theme.color_dimmed)));
             frame.render_widget(footer, popup_chunks[2]);
         }
 
@@ -661,14 +679,16 @@ impl App {
                 ])
                 .split(popup_area);
 
+            let selected_color = hex_to_color(&state.config.theme.color_selected);
+
             // Search input
             let input = Paragraph::new(format!(" 🔍 {}█", search.query))
-                .style(Style::default().fg(Color::Yellow))
+                .style(Style::default().fg(selected_color))
                 .block(
                     Block::default()
                         .title(" Search Tasks ")
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Yellow)),
+                        .border_style(Style::default().fg(selected_color)),
                 );
             frame.render_widget(input, popup_chunks[0]);
 
@@ -679,7 +699,7 @@ impl App {
                 .map(|(i, (_, title, status))| {
                     let is_selected = i == search.selected;
                     let style = if is_selected {
-                        Style::default().bg(Color::Yellow).fg(Color::Black)
+                        Style::default().bg(selected_color).fg(Color::Black)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -701,7 +721,7 @@ impl App {
                     Block::default()
                         .title(" [↑↓] select [Enter] jump [Esc] cancel ")
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::DarkGray)),
+                        .border_style(Style::default().fg(hex_to_color(&state.config.theme.color_dimmed))),
                 );
             frame.render_widget(list, popup_chunks[1]);
         }
@@ -716,7 +736,7 @@ impl App {
                 let main_block = Block::default()
                     .title(" Create Pull Request ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow));
+                    .border_style(Style::default().fg(hex_to_color(&state.config.theme.color_selected)));
                 frame.render_widget(main_block, popup_area);
 
                 // Spinner animation based on frame count
@@ -758,14 +778,14 @@ impl App {
 
                 // Title input
                 let title_style = if popup.editing_title {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(hex_to_color(&state.config.theme.color_selected))
                 } else {
                     Style::default().fg(Color::White)
                 };
                 let title_border = if popup.editing_title {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(hex_to_color(&state.config.theme.color_selected))
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(hex_to_color(&state.config.theme.color_dimmed))
                 };
                 let title_cursor = if popup.editing_title { "█" } else { "" };
                 let title_input = Paragraph::new(format!("{}{}", popup.pr_title, title_cursor))
@@ -780,14 +800,14 @@ impl App {
 
                 // Body input
                 let body_style = if !popup.editing_title {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(hex_to_color(&state.config.theme.color_selected))
                 } else {
                     Style::default().fg(Color::White)
                 };
                 let body_border = if !popup.editing_title {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(hex_to_color(&state.config.theme.color_selected))
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(hex_to_color(&state.config.theme.color_dimmed))
                 };
                 let body_cursor = if !popup.editing_title { "█" } else { "" };
                 let body_input = Paragraph::new(format!("{}{}", popup.pr_body, body_cursor))
@@ -803,7 +823,7 @@ impl App {
 
                 // Help line
                 let help = Paragraph::new(" [Tab] switch field  [Ctrl+s] create PR  [Esc] cancel ")
-                    .style(Style::default().fg(Color::DarkGray));
+                    .style(Style::default().fg(hex_to_color(&state.config.theme.color_dimmed)));
                 frame.render_widget(help, popup_chunks[2]);
             }
         }
@@ -814,7 +834,7 @@ impl App {
             frame.render_widget(Clear, popup_area);
 
             let (title, border_color) = match popup.status {
-                PrCreationStatus::Creating => (" Creating Pull Request ", Color::Yellow),
+                PrCreationStatus::Creating => (" Creating Pull Request ", hex_to_color(&state.config.theme.color_selected)),
                 PrCreationStatus::Success => (" Pull Request Created ", Color::Green),
                 PrCreationStatus::Error => (" Error Creating PR ", Color::Red),
             };
@@ -875,13 +895,36 @@ impl App {
             let main_block = Block::default()
                 .title(" Move to Done? ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow));
+                .border_style(Style::default().fg(hex_to_color(&state.config.theme.color_selected)));
             frame.render_widget(main_block, popup_area);
 
             let inner = popup_area.inner(ratatui::layout::Margin { horizontal: 2, vertical: 2 });
             let text = format!(
                 "PR #{} is still open.\n\nAre you sure you want to move this task to Done?\n\nThis will clean up the worktree and branch.\n\n[y] Yes, move to Done    [n/Esc] Cancel",
                 popup.pr_number
+            );
+            let content = Paragraph::new(text)
+                .style(Style::default().fg(Color::White))
+                .alignment(ratatui::layout::Alignment::Center)
+                .wrap(Wrap { trim: false });
+            frame.render_widget(content, inner);
+        }
+
+        // Delete confirmation popup
+        if let Some(ref popup) = state.delete_confirm_popup {
+            let popup_area = centered_rect(50, 25, area);
+            frame.render_widget(Clear, popup_area);
+
+            let main_block = Block::default()
+                .title(" Delete Task? ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red));
+            frame.render_widget(main_block, popup_area);
+
+            let inner = popup_area.inner(ratatui::layout::Margin { horizontal: 2, vertical: 2 });
+            let text = format!(
+                "Are you sure you want to delete:\n\n\"{}\"\n\nThis will also remove the worktree and tmux session.\n\n[y] Yes, delete    [n/Esc] Cancel",
+                popup.task_title
             );
             let content = Paragraph::new(text)
                 .style(Style::default().fg(Color::White))
@@ -923,7 +966,7 @@ impl App {
                     } else if line.starts_with("@@") {
                         Style::default().fg(Color::Cyan)
                     } else if line.starts_with("diff ") || line.starts_with("index ") {
-                        Style::default().fg(Color::Yellow)
+                        Style::default().fg(hex_to_color(&state.config.theme.color_selected))
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -947,7 +990,7 @@ impl App {
                 total_lines
             );
             let footer = Paragraph::new(footer_text)
-                .style(Style::default().fg(Color::Black).bg(Color::DarkGray));
+                .style(Style::default().fg(Color::Black).bg(hex_to_color(&state.config.theme.color_dimmed)));
             frame.render_widget(footer, popup_chunks[2]);
         }
     }
@@ -974,9 +1017,16 @@ impl App {
             task.title.clone()
         };
 
+        let border_type = if is_selected {
+            BorderType::Thick
+        } else {
+            BorderType::Plain
+        };
+
         let card_block = Block::default()
             .borders(Borders::ALL)
-            .border_style(border_style);
+            .border_style(border_style)
+            .border_type(border_type);
         let inner = card_block.inner(area);
         frame.render_widget(card_block, area);
 
@@ -1011,7 +1061,7 @@ impl App {
             };
 
             let preview = Paragraph::new(truncated)
-                .style(Style::default().fg(hex_to_color(&theme.color_description)))
+                .style(Style::default().fg(hex_to_color(&theme.color_description)).italic())
                 .wrap(Wrap { trim: true });
             frame.render_widget(preview, preview_area);
         }
@@ -1030,11 +1080,11 @@ impl App {
                 let is_current = current_path.as_ref() == Some(&project.path);
 
                 let style = if is_selected {
-                    Style::default().bg(Color::Yellow).fg(Color::Black)
+                    Style::default().bg(hex_to_color(&state.config.theme.color_selected)).fg(Color::Black)
                 } else if is_current {
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(hex_to_color(&state.config.theme.color_selected))
                 } else {
-                    Style::default()
+                    Style::default().fg(hex_to_color(&state.config.theme.color_text))
                 };
 
                 let marker = if is_current { " ●" } else { "" };
@@ -1083,10 +1133,13 @@ impl App {
             ])
             .split(chunks[1]);
 
+        let dimmed_color = hex_to_color(&state.config.theme.color_dimmed);
+        let selected_color = hex_to_color(&state.config.theme.color_selected);
+
         // Message
         let message = Paragraph::new("\n  No project found in current directory.\n")
-            .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)));
+            .style(Style::default().fg(selected_color))
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(dimmed_color)));
         frame.render_widget(message, content_chunks[0]);
 
         // Project list or options
@@ -1099,7 +1152,7 @@ impl App {
                 .map(|(i, project)| {
                     let is_selected = i == state.selected_project;
                     let style = if is_selected {
-                        Style::default().bg(Color::DarkGray).fg(Color::White)
+                        Style::default().bg(dimmed_color).fg(Color::White)
                     } else {
                         Style::default()
                     };
@@ -1111,7 +1164,7 @@ impl App {
                 Block::default()
                     .title(" Projects [j/k] navigate [Enter] open [Esc] back ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow)),
+                    .border_style(Style::default().fg(selected_color)),
             );
             frame.render_widget(list, content_chunks[1]);
         } else {
@@ -1119,13 +1172,13 @@ impl App {
             let options = Paragraph::new(
                 "\n  [p] Open existing project\n  [n] Create new project in current directory\n",
             )
-            .block(Block::default().title(" Options ").borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)));
+            .block(Block::default().title(" Options ").borders(Borders::ALL).border_style(Style::default().fg(dimmed_color)));
             frame.render_widget(options, content_chunks[1]);
         }
 
         // Footer
         let footer = Paragraph::new(" [p] projects  [n] new project  [q] quit ")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(dimmed_color))
             .block(Block::default().borders(Borders::ALL));
         frame.render_widget(footer, chunks[2]);
     }
@@ -1145,6 +1198,11 @@ impl App {
         // Handle Done confirmation popup if open
         if self.state.done_confirm_popup.is_some() {
             return self.handle_done_confirm_key(key);
+        }
+
+        // Handle Delete confirmation popup if open
+        if self.state.delete_confirm_popup.is_some() {
+            return self.handle_delete_confirm_key(key);
         }
 
         // Handle diff popup if open
@@ -1191,6 +1249,24 @@ impl App {
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     // Cancelled
                     self.state.done_confirm_popup = None;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_delete_confirm_key(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        if let Some(popup) = self.state.delete_confirm_popup.clone() {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    // Confirmed - delete the task
+                    self.state.delete_confirm_popup = None;
+                    self.perform_delete_task(&popup.task_id)?;
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    // Cancelled
+                    self.state.delete_confirm_popup = None;
                 }
                 _ => {}
             }
@@ -1380,7 +1456,7 @@ impl App {
                 }
                 false
             }
-            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('k') | KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(ref mut search) = self.state.task_search {
                     if search.selected > 0 {
                         search.selected -= 1;
@@ -1388,7 +1464,7 @@ impl App {
                 }
                 false
             }
-            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('j') | KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(ref mut search) = self.state.task_search {
                     if search.selected < search.matches.len().saturating_sub(1) {
                         search.selected += 1;
@@ -1472,12 +1548,12 @@ impl App {
                 KeyCode::Char('q') if has_ctrl => {
                     self.state.shell_popup = None;
                 }
-                // Scroll with Ctrl+k or Ctrl+Up
-                KeyCode::Char('k') | KeyCode::Up if has_ctrl => {
+                // Scroll up with Ctrl+k or Ctrl+p or Ctrl+Up
+                KeyCode::Char('k') | KeyCode::Char('p') | KeyCode::Up if has_ctrl => {
                     popup.scroll_offset -= 5;
                 }
-                // Scroll with Ctrl+j or Ctrl+Down
-                KeyCode::Char('j') | KeyCode::Down if has_ctrl => {
+                // Scroll down with Ctrl+j or Ctrl+n or Ctrl+Down
+                KeyCode::Char('j') | KeyCode::Char('n') | KeyCode::Down if has_ctrl => {
                     popup.scroll_offset = (popup.scroll_offset + 5).min(0);
                 }
                 KeyCode::PageUp => {
@@ -1708,12 +1784,22 @@ impl App {
                     }
                     self.state.file_search = None;
                 }
-                KeyCode::Up | KeyCode::Char('k') => {
+                KeyCode::Up => {
                     if search.selected > 0 {
                         search.selected -= 1;
                     }
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
+                KeyCode::Down => {
+                    if search.selected < search.matches.len().saturating_sub(1) {
+                        search.selected += 1;
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Char('p') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                    if search.selected > 0 {
+                        search.selected -= 1;
+                    }
+                }
+                KeyCode::Char('j') | KeyCode::Char('n') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
                     if search.selected < search.matches.len().saturating_sub(1) {
                         search.selected += 1;
                     }
@@ -1824,8 +1910,43 @@ impl App {
     }
 
     fn delete_selected_task(&mut self) -> Result<()> {
-        if let Some(task) = self.state.board.selected_task() {
-            if let Some(db) = &self.state.db {
+        if let Some(task) = self.state.board.selected_task().cloned() {
+            // Show confirmation popup
+            self.state.delete_confirm_popup = Some(DeleteConfirmPopup {
+                task_id: task.id.clone(),
+                task_title: task.title.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn perform_delete_task(&mut self, task_id: &str) -> Result<()> {
+        if let Some(db) = &self.state.db {
+            if let Some(task) = db.get_task(task_id)? {
+                // Kill tmux window if exists (not the whole session)
+                if let Some(ref session_name) = task.session_name {
+                    let _ = std::process::Command::new("tmux")
+                        .args(["-L", crate::tmux::AGENT_SERVER])
+                        .args(["kill-window", "-t", session_name])
+                        .output();
+                }
+
+                // Remove worktree if exists
+                if let (Some(ref _worktree_path), Some(ref project_path)) = (&task.worktree_path, &self.state.project_path) {
+                    // Extract slug from branch_name (format: "task/{slug}")
+                    if let Some(ref branch_name) = task.branch_name {
+                        let slug = branch_name.strip_prefix("task/").unwrap_or(branch_name);
+                        let _ = git::remove_worktree(project_path, slug);
+
+                        // Also try to delete the branch
+                        let _ = std::process::Command::new("git")
+                            .current_dir(project_path)
+                            .args(["branch", "-D", branch_name])
+                            .output();
+                    }
+                }
+
+                // Delete from database
                 db.delete_task(&task.id)?;
                 self.refresh_tasks()?;
             }

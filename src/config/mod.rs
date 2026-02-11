@@ -44,6 +44,10 @@ pub struct ThemeConfig {
     /// Color for task descriptions (hex, e.g. "#FFB6C1")
     #[serde(default = "default_color_description")]
     pub color_description: String,
+
+    /// Color for column headers when not selected (hex, e.g. "#AAAAAA")
+    #[serde(default = "default_color_column_header")]
+    pub color_column_header: String,
 }
 
 impl Default for ThemeConfig {
@@ -55,32 +59,37 @@ impl Default for ThemeConfig {
             color_text: default_color_text(),
             color_accent: default_color_accent(),
             color_description: default_color_description(),
+            color_column_header: default_color_column_header(),
         }
     }
 }
 
 fn default_color_selected() -> String {
-    "#FFFF99".to_string() // Light yellow
+    "#ead49a".to_string() // Light yellow
 }
 
 fn default_color_normal() -> String {
-    "#00FFFF".to_string() // Cyan
+    "#5cfff7".to_string() // Cyan
 }
 
 fn default_color_dimmed() -> String {
-    "#666666".to_string() // Dark gray
+    "#9C9991".to_string() // Dark gray
 }
 
 fn default_color_text() -> String {
-    "#FFFFFF".to_string() // White
+    "#f2ece6".to_string() // Rose
 }
 
 fn default_color_accent() -> String {
-    "#00FFFF".to_string() // Cyan
+    "#5cfff7".to_string() // Cyan
 }
 
 fn default_color_description() -> String {
-    "#E8909C".to_string() // Rose
+    "#C4B0AC".to_string() // Rose (dimmed 80%)
+}
+
+fn default_color_column_header() -> String {
+    "#a0d2fa".to_string() // Light gray
 }
 
 impl ThemeConfig {
