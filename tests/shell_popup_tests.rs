@@ -173,21 +173,22 @@ fn test_compute_visible_lines_scrolled_to_top() {
 
 #[test]
 fn test_build_footer_text_at_bottom() {
-    let footer = build_footer_text(0, 10);
+    let footer = build_footer_text(0, 10, false);
     assert!(footer.contains("At bottom"));
     assert!(!footer.contains("Line"));
+    assert!(footer.contains("fullscreen"));
 }
 
 #[test]
 fn test_build_footer_text_scrolled_up() {
-    let footer = build_footer_text(-5, 10);
+    let footer = build_footer_text(-5, 10, false);
     assert!(footer.contains("Line 11")); // start_line + 1
     assert!(footer.contains("bottom")); // Ctrl+g option visible
 }
 
 #[test]
 fn test_build_footer_text_at_top() {
-    let footer = build_footer_text(-100, 0);
+    let footer = build_footer_text(-100, 0, false);
     assert!(footer.contains("Line 1"));
 }
 
@@ -223,7 +224,7 @@ fn test_render_shell_popup_basic() {
 
 #[test]
 fn test_render_shell_popup_with_content() {
-    let backend = TestBackend::new(80, 24);
+    let backend = TestBackend::new(100, 24);
     let mut terminal = Terminal::new(backend).unwrap();
 
     let popup = ShellPopup::new("My Task".to_string(), "window".to_string());
@@ -236,7 +237,7 @@ fn test_render_shell_popup_with_content() {
     ];
 
     terminal.draw(|frame| {
-        let area = Rect::new(0, 0, 80, 24);
+        let area = Rect::new(0, 0, 100, 24);
         render_shell_popup(&popup, frame, area, lines, &colors);
     }).unwrap();
 
@@ -276,7 +277,7 @@ fn test_render_shell_popup_scrolled_up() {
 
 #[test]
 fn test_render_shell_popup_empty_content() {
-    let backend = TestBackend::new(80, 24);
+    let backend = TestBackend::new(100, 24);
     let mut terminal = Terminal::new(backend).unwrap();
 
     let popup = ShellPopup::new("Empty Task".to_string(), "window".to_string());
@@ -284,7 +285,7 @@ fn test_render_shell_popup_empty_content() {
     let lines: Vec<Line> = vec![];
 
     terminal.draw(|frame| {
-        let area = Rect::new(0, 0, 80, 24);
+        let area = Rect::new(0, 0, 100, 24);
         render_shell_popup(&popup, frame, area, lines, &colors);
     }).unwrap();
 

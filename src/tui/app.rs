@@ -1245,7 +1245,11 @@ impl App {
     }
 
     fn draw_shell_popup(popup: &ShellPopup, frame: &mut Frame, area: Rect, theme: &ThemeConfig) {
-        let popup_area = centered_rect_fixed_width(SHELL_POPUP_WIDTH, SHELL_POPUP_HEIGHT_PERCENT, area);
+        let popup_area = if popup.fullscreen {
+            area
+        } else {
+            centered_rect_fixed_width(SHELL_POPUP_WIDTH, SHELL_POPUP_HEIGHT_PERCENT, area)
+        };
 
         // Parse ANSI escape sequences for colors
         let styled_lines = parse_ansi_to_lines(&popup.cached_content);
@@ -1999,6 +2003,21 @@ impl App {
             let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
             match key.code {
+                // Ctrl+f = toggle fullscreen
+                KeyCode::Char('f') if has_ctrl => {
+                    popup.fullscreen = !popup.fullscreen;
+                    // Resize tmux pane to match new popup dimensions
+                    if let Ok((term_width, term_height)) = crossterm::terminal::size() {
+                        let (pane_width, pane_height) = if popup.fullscreen {
+                            (term_width.saturating_sub(2), term_height.saturating_sub(4))
+                        } else {
+                            let popup_height = (term_height as u32 * SHELL_POPUP_HEIGHT_PERCENT as u32 / 100) as u16;
+                            (SHELL_POPUP_CONTENT_WIDTH, popup_height.saturating_sub(4))
+                        };
+                        let _ = self.state.tmux_ops.resize_window(&window_name, pane_width, pane_height);
+                        popup.last_pane_size = Some((pane_width, pane_height));
+                    }
+                }
                 // Ctrl+q = close popup
                 KeyCode::Char('q') if has_ctrl => {
                     self.state.shell_popup = None;

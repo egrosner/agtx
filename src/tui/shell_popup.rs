@@ -11,6 +11,8 @@ pub struct ShellPopup {
     pub cached_content: Vec<u8>,
     /// Last known pane dimensions for resize detection
     pub last_pane_size: Option<(u16, u16)>,
+    /// Whether the popup is displayed fullscreen
+    pub fullscreen: bool,
 }
 
 impl ShellPopup {
@@ -21,6 +23,7 @@ impl ShellPopup {
             scroll_offset: 0,
             cached_content: Vec::new(),
             last_pane_size: None,
+            fullscreen: false,
         }
     }
 
@@ -105,14 +108,19 @@ pub fn compute_visible_lines<'a>(
 }
 
 /// Build the footer text for the shell popup
-pub fn build_footer_text(scroll_offset: i32, start_line: usize) -> String {
+pub fn build_footer_text(scroll_offset: i32, start_line: usize, fullscreen: bool) -> String {
+    let fs_hint = if fullscreen { "exit" } else { "fullscreen" };
     if scroll_offset < 0 {
         format!(
-            " [Ctrl+j/k] scroll [Ctrl+d/u] page [Ctrl+g] bottom [Ctrl+q] close | Line {} ",
+            " [Ctrl+f] {} [Ctrl+j/k] scroll [Ctrl+d/u] page [Ctrl+g] bottom [Ctrl+q] close | Line {} ",
+            fs_hint,
             start_line + 1
         )
     } else {
-        " [Ctrl+j/k] scroll [Ctrl+d/u] page [Ctrl+q] close | At bottom ".to_string()
+        format!(
+            " [Ctrl+f] {} [Ctrl+j/k] scroll [Ctrl+d/u] page [Ctrl+q] close | At bottom ",
+            fs_hint
+        )
     }
 }
 
@@ -266,7 +274,7 @@ pub fn render_shell_popup(
     frame.render_widget(content, popup_chunks[1]);
 
     // Footer with scroll indicator (pad to fill width)
-    let footer_text = build_footer_text(popup.scroll_offset, start_line);
+    let footer_text = build_footer_text(popup.scroll_offset, start_line, popup.fullscreen);
     let padded_footer = format!("{:<width$}", footer_text, width = popup_chunks[2].width as usize);
     let footer = Paragraph::new(padded_footer)
         .style(Style::default().fg(colors.footer_fg).bg(colors.footer_bg));
