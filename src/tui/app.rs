@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, MouseEventKind, EnableMouseCapture, DisableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -126,6 +126,8 @@ struct AppState {
     warning_message: Option<(String, Instant)>,
     // Plugin selection popup
     plugin_select_popup: Option<PluginSelectPopup>,
+    // Track last mouse event time to filter escape sequence fragments from tmux forwarding
+    last_mouse_event: Instant,
 }
 
 /// State for confirming move to Done
@@ -275,7 +277,7 @@ impl App {
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
 
@@ -357,6 +359,7 @@ impl App {
                 cached_plugin: None,
                 warning_message: None,
                 plugin_select_popup: None,
+                last_mouse_event: Instant::now() - std::time::Duration::from_secs(10),
             },
         };
 
@@ -418,6 +421,10 @@ impl App {
                 match event::read()? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         self.handle_key(key)?;
+                    }
+                    Event::Mouse(mouse) => {
+                        self.state.last_mouse_event = Instant::now();
+                        self.handle_mouse(mouse);
                     }
                     _ => {}
                 }
@@ -2050,6 +2057,11 @@ impl App {
                     popup.scroll_to_bottom();
                 }
                 _ => {
+                    // Skip forwarding if this key event arrived within 100ms of a mouse event—
+                    // it's likely a partially-parsed mouse escape sequence fragment, not real input.
+                    if self.state.last_mouse_event.elapsed() < std::time::Duration::from_millis(100) {
+                        return Ok(());
+                    }
                     // Forward all other keys to tmux window (including Esc)
                     send_key_to_tmux(&window_name, key.code, self.state.tmux_ops.as_ref());
                     // After sending a key, refresh content to show the result
@@ -2058,6 +2070,26 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                if let Some(ref mut popup) = self.state.shell_popup {
+                    popup.scroll_up(3);
+                } else if let Some(ref mut popup) = self.state.diff_popup {
+                    popup.scroll_offset = popup.scroll_offset.saturating_sub(3);
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if let Some(ref mut popup) = self.state.shell_popup {
+                    popup.scroll_down(3);
+                } else if let Some(ref mut popup) = self.state.diff_popup {
+                    popup.scroll_offset += 3;
+                }
+            }
+            _ => {}
+        }
     }
 
     fn handle_diff_popup_key(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
@@ -3354,7 +3386,7 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen);
     }
 }
 
