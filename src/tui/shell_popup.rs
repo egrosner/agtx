@@ -112,13 +112,13 @@ pub fn build_footer_text(scroll_offset: i32, start_line: usize, fullscreen: bool
     let fs_hint = if fullscreen { "exit" } else { "fullscreen" };
     if scroll_offset < 0 {
         format!(
-            " [Ctrl+f] {} [Ctrl+j/k] scroll [Ctrl+d/u] page [Ctrl+g] bottom [Ctrl+q] close | Line {} ",
+            " [Ctrl+z] {} [Ctrl+j/k] scroll [Ctrl+d/u] page [Ctrl+g] bottom [Ctrl+q] close | Line {} ",
             fs_hint,
             start_line + 1
         )
     } else {
         format!(
-            " [Ctrl+f] {} [Ctrl+j/k] scroll [Ctrl+d/u] page [Ctrl+q] close | At bottom ",
+            " [Ctrl+z] {} [Ctrl+j/k] scroll [Ctrl+d/u] page [Ctrl+q] close | At bottom ",
             fs_hint
         )
     }
