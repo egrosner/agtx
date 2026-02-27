@@ -1976,12 +1976,13 @@ fn test_bundled_plugins_are_valid_toml() {
 
 #[test]
 fn test_bundled_plugins_list() {
-    // We ship gsd, spec-kit, and void
+    // We ship gsd, spec-kit, void, and superpowers
     let names: Vec<&str> = skills::BUNDLED_PLUGINS.iter().map(|(n, _, _)| *n).collect();
     assert!(names.contains(&"gsd"));
     assert!(names.contains(&"spec-kit"));
     assert!(names.contains(&"void"));
-    assert_eq!(names.len(), 3);
+    assert!(names.contains(&"superpowers"));
+    assert_eq!(names.len(), 4);
 }
 
 #[test]

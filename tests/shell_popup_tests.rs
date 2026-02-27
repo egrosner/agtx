@@ -173,22 +173,22 @@ fn test_compute_visible_lines_scrolled_to_top() {
 
 #[test]
 fn test_build_footer_text_at_bottom() {
-    let footer = build_footer_text(0, 10, false);
+    let footer = build_footer_text(0, 10);
     assert!(footer.contains("At bottom"));
     assert!(!footer.contains("Line"));
-    assert!(footer.contains("fullscreen"));
+    assert!(footer.contains("attach"));
 }
 
 #[test]
 fn test_build_footer_text_scrolled_up() {
-    let footer = build_footer_text(-5, 10, false);
+    let footer = build_footer_text(-5, 10);
     assert!(footer.contains("Line 11")); // start_line + 1
     assert!(footer.contains("bottom")); // Ctrl+g option visible
 }
 
 #[test]
 fn test_build_footer_text_at_top() {
-    let footer = build_footer_text(-100, 0, false);
+    let footer = build_footer_text(-100, 0);
     assert!(footer.contains("Line 1"));
 }
 

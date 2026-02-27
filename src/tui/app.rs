@@ -57,6 +57,14 @@ const SHELL_POPUP_WIDTH: u16 = 102;          // Total width including borders
 const SHELL_POPUP_CONTENT_WIDTH: u16 = 100;  // Content width (SHELL_POPUP_WIDTH - 2 for borders)
 const SHELL_POPUP_HEIGHT_PERCENT: u16 = 75; // Percentage of terminal height
 
+/// Reason the user detached from native tmux attach
+enum DetachReason {
+    /// Ctrl+Z or prefix+d — return to the windowed popup view
+    ReturnToPopup,
+    /// Ctrl+Q — close the popup entirely and return to the board
+    ClosePopup,
+}
+
 /// Application state (separate from terminal for borrow checker)
 struct AppState {
     mode: AppMode,
@@ -1256,11 +1264,7 @@ impl App {
     }
 
     fn draw_shell_popup(popup: &ShellPopup, frame: &mut Frame, area: Rect, theme: &ThemeConfig) {
-        let popup_area = if popup.fullscreen {
-            area
-        } else {
-            centered_rect_fixed_width(SHELL_POPUP_WIDTH, SHELL_POPUP_HEIGHT_PERCENT, area)
-        };
+        let popup_area = centered_rect_fixed_width(SHELL_POPUP_WIDTH, SHELL_POPUP_HEIGHT_PERCENT, area);
 
         // Parse ANSI escape sequences for colors
         let styled_lines = parse_ansi_to_lines(&popup.cached_content);
@@ -2014,19 +2018,30 @@ impl App {
             let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
             match key.code {
-                // Ctrl+z = toggle fullscreen
+                // Ctrl+z = native tmux attach
                 KeyCode::Char('z') if has_ctrl => {
-                    popup.fullscreen = !popup.fullscreen;
-                    // Resize tmux pane to match new popup dimensions
-                    if let Ok((term_width, term_height)) = crossterm::terminal::size() {
-                        let (pane_width, pane_height) = if popup.fullscreen {
-                            (term_width.saturating_sub(2), term_height.saturating_sub(4))
-                        } else {
-                            let popup_height = (term_height as u32 * SHELL_POPUP_HEIGHT_PERCENT as u32 / 100) as u16;
-                            (SHELL_POPUP_CONTENT_WIDTH, popup_height.saturating_sub(4))
-                        };
-                        let _ = self.state.tmux_ops.resize_window(&window_name, pane_width, pane_height);
-                        popup.last_pane_size = Some((pane_width, pane_height));
+                    // window_name is already "session:window" (the full tmux target)
+                    let session = window_name.split(':').next().unwrap_or(&window_name).to_string();
+                    match self.native_attach(&session, &window_name) {
+                        Ok(DetachReason::ClosePopup) => {
+                            self.state.shell_popup = None;
+                            return Ok(());
+                        }
+                        Ok(DetachReason::ReturnToPopup) => {
+                            // Resize tmux pane back to popup dimensions
+                            if let Ok((_term_width, term_height)) = crossterm::terminal::size() {
+                                let popup_height = (term_height as u32 * SHELL_POPUP_HEIGHT_PERCENT as u32 / 100) as u16;
+                                let pane_height = popup_height.saturating_sub(4);
+                                let _ = self.state.tmux_ops.resize_window(&window_name, SHELL_POPUP_CONTENT_WIDTH, pane_height);
+                                if let Some(ref mut p) = self.state.shell_popup {
+                                    p.last_pane_size = Some((SHELL_POPUP_CONTENT_WIDTH, pane_height));
+                                    p.last_refresh = Instant::now() - std::time::Duration::from_secs(1);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // Attach failed, just stay in popup
+                        }
                     }
                 }
                 // Ctrl+q = close popup
@@ -3383,6 +3398,115 @@ impl App {
         self.refresh_tasks()?;
 
         Ok(())
+    }
+
+    /// Suspend the TUI and natively attach to a tmux session/window.
+    /// Returns the reason the user detached (Ctrl+Q to close, Ctrl+Z to return to popup).
+    fn native_attach(&mut self, session: &str, window_target: &str) -> Result<DetachReason> {
+        use std::process::Command;
+
+        let pid = std::process::id();
+        let flag_path = format!("/tmp/agtx-detach-{}", pid);
+
+        // Clean stale flag file
+        let _ = std::fs::remove_file(&flag_path);
+
+        // Set up temporary tmux key bindings for detach signaling
+        // Ctrl+Q: write "close" flag then detach
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["bind-key", "-T", "root", "C-q", "run-shell",
+                &format!("echo close > {} && tmux -L {} detach-client", flag_path, tmux::AGENT_SERVER)])
+            .output();
+
+        // Ctrl+Z: write "popup" flag then detach
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["bind-key", "-T", "root", "C-z", "run-shell",
+                &format!("echo popup > {} && tmux -L {} detach-client", flag_path, tmux::AGENT_SERVER)])
+            .output();
+
+        // Show status bar with keybinding hints (themed background, matching popup header)
+        let status_text = " [Ctrl+z] back to popup  [Ctrl+q] close";
+        let status_bg = &self.state.config.theme.color_popup_header;
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["set-option", "-t", session, "status", "on"])
+            .output();
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["set-option", "-t", session, "status-style", &format!("bg={},fg=black", status_bg)])
+            .output();
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["set-option", "-t", session, "status-left", status_text])
+            .output();
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["set-option", "-t", session, "status-left-length", &(status_text.len().to_string())])
+            .output();
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["set-option", "-t", session, "status-right", ""])
+            .output();
+
+        // Leave alternate screen, disable raw mode, disable mouse capture
+        let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+
+        // Resize tmux window to full terminal size for native experience
+        if let Ok((term_width, term_height)) = crossterm::terminal::size() {
+            let _ = Command::new("tmux")
+                .args(["-L", tmux::AGENT_SERVER])
+                .args(["resize-window", "-t", window_target,
+                    "-x", &term_width.to_string(),
+                    "-y", &term_height.to_string()])
+                .output();
+        }
+
+        // Select the target window and attach (blocking - inherits stdio)
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["select-window", "-t", window_target])
+            .output();
+
+        let attach_result = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["attach-session", "-t", session])
+            .status();
+
+        // Re-enable terminal (unconditionally, before error checking)
+        let _ = enable_raw_mode();
+        let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen, EnableMouseCapture);
+        self.terminal.clear()?;
+
+        // Read the detach reason from flag file
+        let reason = match std::fs::read_to_string(&flag_path) {
+            Ok(content) if content.trim() == "close" => DetachReason::ClosePopup,
+            _ => DetachReason::ReturnToPopup, // Default: prefix+d, session death, or Ctrl+Z
+        };
+
+        // Cleanup: unbind keys, hide status bar, and remove flag file
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["set-option", "-t", session, "status", "off"])
+            .output();
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["unbind-key", "-T", "root", "C-q"])
+            .output();
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["unbind-key", "-T", "root", "C-z"])
+            .output();
+        let _ = std::fs::remove_file(&flag_path);
+
+        // Check attach result for errors (after terminal is restored)
+        if let Err(e) = attach_result {
+            anyhow::bail!("Failed to attach to tmux session: {}", e);
+        }
+
+        Ok(reason)
     }
 }
 
