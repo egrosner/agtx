@@ -1,0 +1,20 @@
+name = "superpowers"
+description = "Superpowers brainstorm → plan → execute workflow"
+supported_agents = ["claude"]
+
+[commands]
+planning = "/superpowers:brainstorming"
+running = "/superpowers:executing-plans"
+review = "/commit-commands:commit-push-pr"
+
+[prompts]
+planning = "Task: {task}"
+running = ""
+review = ""
+
+[artifacts]
+planning = "docs/plans/*.md"
+running = ""
+review = ""
+
+[prompt_triggers]

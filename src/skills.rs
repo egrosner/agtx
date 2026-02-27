@@ -196,6 +196,11 @@ pub const BUNDLED_PLUGINS: &[(&str, &str, &str)] = &[
         "Plain agent session - no prompting or skills",
         include_str!("../plugins/void/plugin.toml"),
     ),
+    (
+        "superpowers",
+        "Superpowers brainstorm → plan → execute workflow",
+        include_str!("../plugins/superpowers/plugin.toml"),
+    ),
 ];
 
 /// Extract the description from YAML frontmatter.
