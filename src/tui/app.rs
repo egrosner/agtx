@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, MouseEventKind, EnableMouseCapture, DisableMouseCapture},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -275,7 +275,7 @@ impl App {
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
 
@@ -418,9 +418,6 @@ impl App {
                 match event::read()? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         self.handle_key(key)?;
-                    }
-                    Event::Mouse(mouse) => {
-                        self.handle_mouse(mouse);
                     }
                     _ => {}
                 }
@@ -2063,26 +2060,6 @@ impl App {
         Ok(())
     }
 
-    fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
-        match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                if let Some(ref mut popup) = self.state.shell_popup {
-                    popup.scroll_up(3);
-                } else if let Some(ref mut popup) = self.state.diff_popup {
-                    popup.scroll_offset = popup.scroll_offset.saturating_sub(3);
-                }
-            }
-            MouseEventKind::ScrollDown => {
-                if let Some(ref mut popup) = self.state.shell_popup {
-                    popup.scroll_down(3);
-                } else if let Some(ref mut popup) = self.state.diff_popup {
-                    popup.scroll_offset += 3;
-                }
-            }
-            _ => {}
-        }
-    }
-
     fn handle_diff_popup_key(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
         if let Some(ref mut popup) = self.state.diff_popup {
             match key.code {
@@ -3377,7 +3354,7 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen);
+        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
     }
 }
 
