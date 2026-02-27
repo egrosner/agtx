@@ -53,8 +53,8 @@ fn build_footer_text(input_mode: InputMode, sidebar_focused: bool, selected_colu
 type Terminal = ratatui::Terminal<CrosstermBackend<Stdout>>;
 
 /// Shell popup dimensions - used for both rendering and tmux window sizing
-const SHELL_POPUP_WIDTH: u16 = 82;          // Total width including borders
-const SHELL_POPUP_CONTENT_WIDTH: u16 = 80;  // Content width (SHELL_POPUP_WIDTH - 2 for borders)
+const SHELL_POPUP_WIDTH: u16 = 102;          // Total width including borders
+const SHELL_POPUP_CONTENT_WIDTH: u16 = 100;  // Content width (SHELL_POPUP_WIDTH - 2 for borders)
 const SHELL_POPUP_HEIGHT_PERCENT: u16 = 75; // Percentage of terminal height
 
 /// Application state (separate from terminal for borrow checker)
