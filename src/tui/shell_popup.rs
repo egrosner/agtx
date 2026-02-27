@@ -13,6 +13,8 @@ pub struct ShellPopup {
     pub last_pane_size: Option<(u16, u16)>,
     /// Whether the popup is displayed fullscreen
     pub fullscreen: bool,
+    /// Last time we refreshed content from tmux (throttle subprocess spawning)
+    pub last_refresh: std::time::Instant,
 }
 
 impl ShellPopup {
@@ -24,6 +26,7 @@ impl ShellPopup {
             cached_content: Vec::new(),
             last_pane_size: None,
             fullscreen: false,
+            last_refresh: std::time::Instant::now() - std::time::Duration::from_secs(10),
         }
     }
 

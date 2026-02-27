@@ -430,9 +430,12 @@ impl App {
                 }
             }
 
-            // Refresh shell popup content periodically (every poll cycle when open)
+            // Refresh shell popup content periodically (throttled to avoid spawning too many subprocesses)
             if let Some(ref mut popup) = self.state.shell_popup {
-                popup.cached_content = capture_tmux_pane_with_history(&popup.window_name, 500, self.state.tmux_ops.as_ref());
+                if popup.last_refresh.elapsed() >= std::time::Duration::from_millis(300) {
+                    popup.cached_content = capture_tmux_pane_with_history(&popup.window_name, 500, self.state.tmux_ops.as_ref());
+                    popup.last_refresh = Instant::now();
+                }
             }
 
             // Periodically refresh session status
@@ -2064,8 +2067,8 @@ impl App {
                     }
                     // Forward all other keys to tmux window (including Esc)
                     send_key_to_tmux(&window_name, key.code, self.state.tmux_ops.as_ref());
-                    // After sending a key, refresh content to show the result
-                    popup.cached_content = capture_tmux_pane_with_history(&window_name, 500, self.state.tmux_ops.as_ref());
+                    // Force refresh on next loop cycle so typed input shows quickly
+                    popup.last_refresh = Instant::now() - std::time::Duration::from_secs(1);
                 }
             }
         }
