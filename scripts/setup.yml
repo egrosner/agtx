@@ -1,0 +1,141 @@
+---
+# Ansible playbook to install agtx build dependencies
+# Usage: ansible-playbook scripts/setup.yml --ask-become-pass
+#
+# For local machine only:
+#   ansible-playbook scripts/setup.yml --connection=local -i localhost, --ask-become-pass
+
+- name: Install agtx build dependencies
+  hosts: all
+  become: false
+
+  vars:
+    rust_toolchain: stable
+    cargo_bin: "{{ ansible_env.HOME }}/.cargo/bin"
+
+  tasks:
+    # ── Detect OS ──────────────────────────────────────────
+    - name: Gather facts
+      ansible.builtin.setup:
+        filter: ansible_os_family
+
+    # ── macOS (Homebrew) ───────────────────────────────────
+    - name: Install dependencies via Homebrew (macOS)
+      when: ansible_os_family == "Darwin"
+      block:
+        - name: Check Homebrew is installed
+          ansible.builtin.command: which brew
+          register: brew_check
+          changed_when: false
+          failed_when: brew_check.rc != 0
+
+        - name: Install macOS packages
+          community.general.homebrew:
+            name:
+              - tmux
+              - git
+              - gh
+            state: present
+
+    # ── Debian/Ubuntu (apt) ────────────────────────────────
+    - name: Install dependencies via apt (Debian/Ubuntu)
+      when: ansible_os_family == "Debian"
+      become: true
+      block:
+        - name: Install apt packages
+          ansible.builtin.apt:
+            name:
+              - tmux
+              - git
+              - build-essential
+              - pkg-config
+              - libssl-dev
+            state: present
+            update_cache: true
+
+        - name: Install gh CLI (Debian/Ubuntu)
+          block:
+            - name: Check if gh is already installed
+              ansible.builtin.command: which gh
+              register: gh_check
+              changed_when: false
+              failed_when: false
+
+            - name: Add GitHub CLI apt repo
+              when: gh_check.rc != 0
+              block:
+                - name: Add GitHub CLI keyring
+                  ansible.builtin.shell: |
+                    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+                      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+                    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+                  args:
+                    creates: /usr/share/keyrings/githubcli-archive-keyring.gpg
+
+                - name: Add GitHub CLI apt source
+                  ansible.builtin.copy:
+                    content: "deb [arch={{ ansible_architecture }} signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main"
+                    dest: /etc/apt/sources.list.d/github-cli.list
+                    mode: "0644"
+
+                - name: Install gh
+                  ansible.builtin.apt:
+                    name: gh
+                    state: present
+                    update_cache: true
+
+    # ── Fedora/RHEL (dnf) ─────────────────────────────────
+    - name: Install dependencies via dnf (RedHat/Fedora)
+      when: ansible_os_family == "RedHat"
+      become: true
+      block:
+        - name: Install dnf packages
+          ansible.builtin.dnf:
+            name:
+              - tmux
+              - git
+              - gcc
+              - pkg-config
+              - openssl-devel
+              - gh
+            state: present
+
+    # ── Rust (all platforms) ───────────────────────────────
+    - name: Check if rustup is installed
+      ansible.builtin.command: which rustup
+      register: rustup_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install Rust via rustup
+      when: rustup_check.rc != 0
+      ansible.builtin.shell: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain {{ rust_toolchain }}
+      args:
+        creates: "{{ ansible_env.HOME }}/.cargo/bin/rustup"
+
+    - name: Ensure stable toolchain is installed
+      when: rustup_check.rc == 0
+      ansible.builtin.command: "{{ cargo_bin }}/rustup toolchain install {{ rust_toolchain }}"
+      register: toolchain_install
+      changed_when: "'installed' in toolchain_install.stdout"
+
+    # ── Summary ────────────────────────────────────────────
+    - name: Verify installations
+      ansible.builtin.command: "{{ item }}"
+      environment:
+        PATH: "{{ cargo_bin }}:{{ ansible_env.PATH }}"
+      loop:
+        - rustc --version
+        - cargo --version
+        - tmux -V
+        - git --version
+      register: versions
+      changed_when: false
+
+    - name: Print versions
+      ansible.builtin.debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ versions.results }}"
+      loop_control:
+        label: "{{ item.item }}"

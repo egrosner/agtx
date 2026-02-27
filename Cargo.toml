@@ -1,6 +1,6 @@
 [package]
 name = "agtx"
-version = "0.1.0"
+version = "0.1.1-erichfork"
 edition = "2021"
 description = "Terminal-native kanban board for managing coding agents"
 authors = ["agtx contributors"]

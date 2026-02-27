@@ -15,6 +15,10 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     let mode = match args.get(1).map(|s| s.as_str()) {
+        Some("--version") | Some("-V") => {
+            println!("agtx {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
         Some("-g") => AppMode::Dashboard,
         Some(".") => AppMode::Project(std::env::current_dir()?),
         Some(path) => AppMode::Project(PathBuf::from(path)),
