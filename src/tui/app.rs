@@ -38,10 +38,10 @@ fn build_footer_text(input_mode: InputMode, sidebar_focused: bool, selected_colu
                 " [j/k] navigate  [Enter] open  [l] board  [e] hide sidebar  [q] quit ".to_string()
             } else {
                 match selected_column {
-                    0 => " [o] new  [/] search  [Enter] open  [x] del  [d] diff  [R] research  [m] plan  [M] run  [e] sidebar  [q] quit".to_string(),
-                    1 => " [o] new  [/] search  [Enter] open  [x] del  [d] diff  [m] run  [e] sidebar  [q] quit".to_string(),
-                    2 | 3 => " [o] new  [/] search  [Enter] open  [x] del  [d] diff  [m] move  [r] move left  [e] sidebar  [q] quit".to_string(),
-                    _ => " [o] new  [/] search  [Enter] open  [x] del  [e] sidebar  [q] quit".to_string(),
+                    0 => " [o] new  [/] search  [Enter] open  [S-Enter] fullscreen  [x] del  [d] diff  [R] research  [m] plan  [M] run  [e] sidebar  [q] quit".to_string(),
+                    1 => " [o] new  [/] search  [Enter] open  [S-Enter] fullscreen  [x] del  [d] diff  [m] run  [e] sidebar  [q] quit".to_string(),
+                    2 | 3 => " [o] new  [/] search  [Enter] open  [S-Enter] fullscreen  [x] del  [d] diff  [m] move  [r] move left  [e] sidebar  [q] quit".to_string(),
+                    _ => " [o] new  [/] search  [Enter] open  [S-Enter] fullscreen  [x] del  [e] sidebar  [q] quit".to_string(),
                 }
             }
         }
@@ -1665,7 +1665,7 @@ impl App {
             AppMode::Dashboard => self.handle_dashboard_key(key.code),
             AppMode::Project(_) => {
                 match self.state.input_mode {
-                    InputMode::Normal => self.handle_normal_key(key.code),
+                    InputMode::Normal => self.handle_normal_key(key),
                     InputMode::InputTitle => self.handle_title_input(key),
                     InputMode::InputDescription => self.handle_description_input(key),
                 }
@@ -2344,10 +2344,12 @@ impl App {
         Ok(())
     }
 
-    fn handle_normal_key(&mut self, key: KeyCode) -> Result<()> {
+    fn handle_normal_key(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        let has_shift = key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT);
+
         // Handle sidebar navigation if focused
         if self.state.sidebar_focused && self.state.sidebar_visible {
-            match key {
+            match key.code {
                 KeyCode::Char('q') => self.state.should_quit = true,
                 KeyCode::Char('e') => {
                     // Toggle sidebar visibility
@@ -2386,7 +2388,7 @@ impl App {
         }
 
         // Handle board navigation
-        match key {
+        match key.code {
             KeyCode::Char('q') => self.state.should_quit = true,
             KeyCode::Char('e') => {
                 // Toggle sidebar visibility
@@ -2413,6 +2415,15 @@ impl App {
                 self.state.input_buffer.clear();
                 self.state.pending_task_title.clear();
                 self.state.editing_task_id = None;
+            }
+            KeyCode::Enter if has_shift => {
+                // Shift+Enter: open task in fullscreen native tmux attach
+                if let Some(task) = self.state.board.selected_task() {
+                    if let Some(window_name) = &task.session_name.clone() {
+                        let session = self.state.project_name.clone();
+                        let _ = self.native_attach(&session, window_name);
+                    }
+                }
             }
             KeyCode::Enter => {
                 if let Some(task) = self.state.board.selected_task() {
