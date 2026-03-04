@@ -3858,28 +3858,20 @@ impl App {
         let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen);
         let _ = disable_raw_mode();
 
-        // Select the target window before resizing/attaching
+        // Select the target window before attaching
         let _ = Command::new("tmux")
             .args(["-L", tmux::AGENT_SERVER])
             .args(["select-window", "-t", window_target])
             .output();
 
-        // Resize tmux window to full terminal size (-1 row for status bar)
-        if let Ok((term_width, term_height)) = crossterm::terminal::size() {
-            let pane_height = term_height.saturating_sub(1);
-            let _ = Command::new("tmux")
-                .args(["-L", tmux::AGENT_SERVER])
-                .args(["resize-window", "-t", window_target,
-                    "-x", &term_width.to_string(),
-                    "-y", &pane_height.to_string()])
-                .output();
-            let _ = Command::new("tmux")
-                .args(["-L", tmux::AGENT_SERVER])
-                .args(["resize-pane", "-t", window_target,
-                    "-x", &term_width.to_string(),
-                    "-y", &pane_height.to_string()])
-                .output();
-        }
+        // Set window-size to "latest" so tmux auto-resizes all windows to match
+        // the attaching client's terminal dimensions. Without this, detached sessions
+        // (created with new-session -d at 80x24) or manually resized popup windows
+        // show dot filler when the pane is smaller than the terminal.
+        let _ = Command::new("tmux")
+            .args(["-L", tmux::AGENT_SERVER])
+            .args(["set-option", "-t", session, "window-size", "latest"])
+            .output();
 
         let attach_result = Command::new("tmux")
             .args(["-L", tmux::AGENT_SERVER])
