@@ -2189,8 +2189,8 @@ impl App {
             let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
             match key.code {
-                // Ctrl+z = native tmux attach
-                KeyCode::Char('z') if has_ctrl => {
+                // Ctrl+f = native tmux attach (fullscreen)
+                KeyCode::Char('f') if has_ctrl => {
                     // window_name is already "session:window" (the full tmux target)
                     let session = window_name.split(':').next().unwrap_or(&window_name).to_string();
                     match self.native_attach(&session, &window_name, true) {
@@ -3822,15 +3822,15 @@ impl App {
         // Ctrl+Z: write "popup" flag then detach
         let _ = Command::new("tmux")
             .args(["-L", tmux::AGENT_SERVER])
-            .args(["bind-key", "-T", "root", "C-z", "run-shell",
+            .args(["bind-key", "-T", "root", "C-f", "run-shell",
                 &format!("echo popup > {} && tmux -L {} detach-client", flag_path, tmux::AGENT_SERVER)])
             .output();
 
         // Show status bar with keybinding hints (themed background, matching popup header)
         let status_text = if from_popup {
-            " [Ctrl+z] back to popup  [Ctrl+q] close"
+            " [Ctrl+f] back to popup  [Ctrl+q] close"
         } else {
-            " [Ctrl+z] back to board  [Ctrl+q] back to board"
+            " [Ctrl+f] back to board  [Ctrl+q] back to board"
         };
         let status_bg = &self.state.config.theme.color_popup_header;
         let _ = Command::new("tmux")
@@ -3900,7 +3900,7 @@ impl App {
             .output();
         let _ = Command::new("tmux")
             .args(["-L", tmux::AGENT_SERVER])
-            .args(["unbind-key", "-T", "root", "C-z"])
+            .args(["unbind-key", "-T", "root", "C-f"])
             .output();
         let _ = std::fs::remove_file(&flag_path);
 
