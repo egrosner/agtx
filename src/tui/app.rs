@@ -39,8 +39,8 @@ fn build_footer_text(input_mode: InputMode, sidebar_focused: bool, selected_colu
             } else {
                 match selected_column {
                     0 => " [o] new  [/] search  [Enter] open  [x] del  [d] diff  [R] research  [m] plan  [M] run  [e] sidebar  [q] quit".to_string(),
-                    1 => " [o] new  [/] search  [Enter] open  [x] del  [d] diff  [m] run  [e] sidebar  [q] quit".to_string(),
-                    2 | 3 => " [o] new  [/] search  [Enter] open  [x] del  [d] diff  [m] move  [r] move left  [e] sidebar  [q] quit".to_string(),
+                    1 => " [o] new  [/] search  [Enter] open  [x] del  [d] diff  [f] fullscreen  [m] run  [e] sidebar  [q] quit".to_string(),
+                    2 | 3 => " [o] new  [/] search  [Enter] open  [x] del  [d] diff  [f] fullscreen  [m] move  [r] move left  [e] sidebar  [q] quit".to_string(),
                     _ => " [o] new  [/] search  [Enter] open  [x] del  [e] sidebar  [q] quit".to_string(),
                 }
             }
@@ -142,6 +142,8 @@ struct AppState {
     plugin_select_popup: Option<PluginSelectPopup>,
     // Track last mouse event time to filter escape sequence fragments from tmux forwarding
     last_mouse_event: Instant,
+    // Buffered keys to send to tmux in a single batch after draining events
+    pending_tmux_keys: Vec<String>,
 }
 
 /// State for confirming move to Done
@@ -398,6 +400,7 @@ impl App {
                 warning_message: None,
                 plugin_select_popup: None,
                 last_mouse_event: Instant::now() - std::time::Duration::from_secs(10),
+                pending_tmux_keys: Vec::new(),
             },
         };
 
@@ -483,28 +486,50 @@ impl App {
             }
 
             if event::poll(std::time::Duration::from_millis(100))? {
-                match event::read()? {
-                    Event::Key(key) if key.kind == KeyEventKind::Press => {
-                        self.handle_key(key)?;
+                // Drain all available events before doing expensive work (tmux capture, draw).
+                // This batches rapid keystrokes so we only capture/redraw once after the burst.
+                loop {
+                    match event::read()? {
+                        Event::Key(key) if key.kind == KeyEventKind::Press => {
+                            self.handle_key(key)?;
+                        }
+                        Event::Mouse(mouse) => {
+                            self.state.last_mouse_event = Instant::now();
+                            self.handle_mouse(mouse);
+                        }
+                        _ => {}
                     }
-                    Event::Mouse(mouse) => {
-                        self.state.last_mouse_event = Instant::now();
-                        self.handle_mouse(mouse);
+                    // Keep draining if more events are immediately available
+                    if !event::poll(std::time::Duration::from_millis(0))? {
+                        break;
                     }
-                    _ => {}
                 }
             }
 
-            // Refresh shell popup content periodically (throttled to avoid spawning too many subprocesses)
+            // Flush any buffered tmux keys in a single subprocess call
+            if !self.state.pending_tmux_keys.is_empty() {
+                if let Some(ref popup) = self.state.shell_popup {
+                    let keys: Vec<String> = self.state.pending_tmux_keys.drain(..).collect();
+                    let _ = self.state.tmux_ops.send_keys_batch(&popup.window_name, &keys);
+                } else {
+                    self.state.pending_tmux_keys.clear();
+                }
+            }
+
+            // Refresh shell popup content periodically
+            // Use a shorter interval (50ms) when keys were just sent, otherwise 300ms
             if let Some(ref mut popup) = self.state.shell_popup {
-                if popup.last_refresh.elapsed() >= std::time::Duration::from_millis(300) {
+                let refresh_interval = std::time::Duration::from_millis(100);
+                if popup.last_refresh.elapsed() >= refresh_interval {
                     popup.cached_content = capture_tmux_pane_with_history(&popup.window_name, 500, self.state.tmux_ops.as_ref());
                     popup.last_refresh = Instant::now();
                 }
             }
 
-            // Periodically refresh session status
-            self.refresh_sessions()?;
+            // Periodically refresh session status (skip when popup is open to avoid unnecessary work)
+            if self.state.shell_popup.is_none() {
+                self.refresh_sessions()?;
+            }
 
             // Clear expired warning messages
             if let Some((_, created)) = &self.state.warning_message {
@@ -2168,7 +2193,7 @@ impl App {
                 KeyCode::Char('z') if has_ctrl => {
                     // window_name is already "session:window" (the full tmux target)
                     let session = window_name.split(':').next().unwrap_or(&window_name).to_string();
-                    match self.native_attach(&session, &window_name) {
+                    match self.native_attach(&session, &window_name, true) {
                         Ok(DetachReason::ClosePopup) => {
                             self.state.shell_popup = None;
                             return Ok(());
@@ -2226,10 +2251,10 @@ impl App {
                     if self.state.last_mouse_event.elapsed() < std::time::Duration::from_millis(100) {
                         return Ok(());
                     }
-                    // Forward all other keys to tmux window (including Esc)
-                    send_key_to_tmux(&window_name, key.code, self.state.tmux_ops.as_ref());
-                    // Force refresh on next loop cycle so typed input shows quickly
-                    popup.last_refresh = Instant::now() - std::time::Duration::from_secs(1);
+                    // Buffer key for batched send after draining all events
+                    if let Some(key_str) = key_code_to_tmux_str(key.code) {
+                        self.state.pending_tmux_keys.push(key_str);
+                    }
                 }
             }
         }
@@ -2463,6 +2488,19 @@ impl App {
                     matches: self.get_all_task_matches(""),
                     selected: 0,
                 });
+            }
+            KeyCode::Char('f') => {
+                // Fullscreen: native tmux attach directly from the board
+                if let Some(task) = self.state.board.selected_task() {
+                    if let Some(window_name) = &task.session_name.clone() {
+                        let session = self.state.project_name.clone();
+                        let target = format!("{}:{}", session, window_name);
+                        match self.native_attach(&session, &target, false) {
+                            Ok(DetachReason::ClosePopup) | Ok(DetachReason::ReturnToPopup) => {}
+                            Err(_) => {}
+                        }
+                    }
+                }
             }
             KeyCode::Char('P') => {
                 // Open plugin selection popup
@@ -3764,7 +3802,7 @@ impl App {
 
     /// Suspend the TUI and natively attach to a tmux session/window.
     /// Returns the reason the user detached (Ctrl+Q to close, Ctrl+Z to return to popup).
-    fn native_attach(&mut self, session: &str, window_target: &str) -> Result<DetachReason> {
+    fn native_attach(&mut self, session: &str, window_target: &str, from_popup: bool) -> Result<DetachReason> {
         use std::process::Command;
 
         let pid = std::process::id();
@@ -3789,7 +3827,11 @@ impl App {
             .output();
 
         // Show status bar with keybinding hints (themed background, matching popup header)
-        let status_text = " [Ctrl+z] back to popup  [Ctrl+q] close";
+        let status_text = if from_popup {
+            " [Ctrl+z] back to popup  [Ctrl+q] close"
+        } else {
+            " [Ctrl+z] back to board  [Ctrl+q] back to board"
+        };
         let status_bg = &self.state.config.theme.color_popup_header;
         let _ = Command::new("tmux")
             .args(["-L", tmux::AGENT_SERVER])
@@ -3816,21 +3858,28 @@ impl App {
         let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen);
         let _ = disable_raw_mode();
 
-        // Resize tmux window to full terminal size for native experience
-        if let Ok((term_width, term_height)) = crossterm::terminal::size() {
-            let _ = Command::new("tmux")
-                .args(["-L", tmux::AGENT_SERVER])
-                .args(["resize-window", "-t", window_target,
-                    "-x", &term_width.to_string(),
-                    "-y", &term_height.to_string()])
-                .output();
-        }
-
-        // Select the target window and attach (blocking - inherits stdio)
+        // Select the target window before resizing/attaching
         let _ = Command::new("tmux")
             .args(["-L", tmux::AGENT_SERVER])
             .args(["select-window", "-t", window_target])
             .output();
+
+        // Resize tmux window to full terminal size (-1 row for status bar)
+        if let Ok((term_width, term_height)) = crossterm::terminal::size() {
+            let pane_height = term_height.saturating_sub(1);
+            let _ = Command::new("tmux")
+                .args(["-L", tmux::AGENT_SERVER])
+                .args(["resize-window", "-t", window_target,
+                    "-x", &term_width.to_string(),
+                    "-y", &pane_height.to_string()])
+                .output();
+            let _ = Command::new("tmux")
+                .args(["-L", tmux::AGENT_SERVER])
+                .args(["resize-pane", "-t", window_target,
+                    "-x", &term_width.to_string(),
+                    "-y", &pane_height.to_string()])
+                .output();
+        }
 
         let attach_result = Command::new("tmux")
             .args(["-L", tmux::AGENT_SERVER])
@@ -4329,29 +4378,35 @@ fn push_changes_to_existing_pr(
     Ok(task.pr_url.clone().unwrap_or_else(|| "Changes pushed to existing PR".to_string()))
 }
 
-/// Send a key to a tmux pane
-fn send_key_to_tmux(window_name: &str, key: KeyCode, tmux_ops: &dyn TmuxOperations) {
-    let key_str = match key {
-        KeyCode::Char(c) => c.to_string(),
-        KeyCode::Enter => "Enter".to_string(),
-        KeyCode::Esc => "Escape".to_string(),
-        KeyCode::Backspace => "BSpace".to_string(),
-        KeyCode::Tab => "Tab".to_string(),
-        KeyCode::Up => "Up".to_string(),
-        KeyCode::Down => "Down".to_string(),
-        KeyCode::Left => "Left".to_string(),
-        KeyCode::Right => "Right".to_string(),
-        KeyCode::Home => "Home".to_string(),
-        KeyCode::End => "End".to_string(),
-        KeyCode::PageUp => "PageUp".to_string(),
-        KeyCode::PageDown => "PageDown".to_string(),
-        KeyCode::Delete => "DC".to_string(),
-        KeyCode::Insert => "IC".to_string(),
-        KeyCode::F(n) => format!("F{}", n),
-        _ => return,
-    };
+/// Convert a KeyCode to the tmux key string, or None if unsupported
+fn key_code_to_tmux_str(key: KeyCode) -> Option<String> {
+    match key {
+        KeyCode::Char(c) => Some(c.to_string()),
+        KeyCode::Enter => Some("Enter".to_string()),
+        KeyCode::Esc => Some("Escape".to_string()),
+        KeyCode::Backspace => Some("BSpace".to_string()),
+        KeyCode::Tab => Some("Tab".to_string()),
+        KeyCode::Up => Some("Up".to_string()),
+        KeyCode::Down => Some("Down".to_string()),
+        KeyCode::Left => Some("Left".to_string()),
+        KeyCode::Right => Some("Right".to_string()),
+        KeyCode::Home => Some("Home".to_string()),
+        KeyCode::End => Some("End".to_string()),
+        KeyCode::PageUp => Some("PageUp".to_string()),
+        KeyCode::PageDown => Some("PageDown".to_string()),
+        KeyCode::Delete => Some("DC".to_string()),
+        KeyCode::Insert => Some("IC".to_string()),
+        KeyCode::F(n) => Some(format!("F{}", n)),
+        _ => None,
+    }
+}
 
-    let _ = tmux_ops.send_keys_literal(window_name, &key_str);
+/// Send a key to a tmux pane (used by tests; popup now uses batched send)
+#[allow(dead_code)]
+fn send_key_to_tmux(window_name: &str, key: KeyCode, tmux_ops: &dyn TmuxOperations) {
+    if let Some(key_str) = key_code_to_tmux_str(key) {
+        let _ = tmux_ops.send_keys_literal(window_name, &key_str);
+    }
 }
 
 /// Parse ANSI escape sequences to ratatui Lines with colors

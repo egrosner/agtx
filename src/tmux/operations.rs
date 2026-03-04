@@ -29,6 +29,9 @@ pub trait TmuxOperations: Send + Sync {
     /// Send keys to a window without pressing Enter
     fn send_keys_literal(&self, target: &str, keys: &str) -> Result<()>;
 
+    /// Send multiple keys to a window in a single tmux call (batched for performance)
+    fn send_keys_batch(&self, target: &str, keys: &[String]) -> Result<()>;
+
     /// Capture pane content
     fn capture_pane(&self, target: &str) -> Result<String>;
 
@@ -114,6 +117,20 @@ impl TmuxOperations for RealTmuxOps {
             .args(["-L", super::AGENT_SERVER])
             .args(["send-keys", "-t", target, keys])
             .output()?;
+        Ok(())
+    }
+
+    fn send_keys_batch(&self, target: &str, keys: &[String]) -> Result<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let mut cmd = std::process::Command::new("tmux");
+        cmd.args(["-L", super::AGENT_SERVER])
+            .args(["send-keys", "-t", target]);
+        for key in keys {
+            cmd.arg(key);
+        }
+        cmd.output()?;
         Ok(())
     }
 

@@ -2,6 +2,10 @@
 
 A terminal-native kanban board for managing multiple coding agent sessions (Claude Code, Codex, Gemini, Copilot, OpenCode) with isolated git worktrees.
 
+## Version Bumping
+
+**Every code change must bump the patch version** in `Cargo.toml` before committing. For example, `0.1.4-erichfork` → `0.1.5-erichfork`. Keep the `-erichfork` suffix.
+
 ## Quick Start
 
 ```bash
